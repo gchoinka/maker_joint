@@ -71,70 +71,46 @@ def middle_bolt() -> List[Tuple[Tuple[OpenSCADObject, P3], str]]:
             ]
 
 
-# TODO replace return type with dataclass
-def create_circle_coordinates(radius1: float, radius2: float, num_triangles: int) -> List[
-    Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], float]]:
-    coordinates = []
-    for i in range(num_triangles):
-        theta1 = 2 * math.pi * i / num_triangles
-        theta2 = 2 * math.pi * (i + 1) / num_triangles
-
-        x1 = radius2 * math.cos(theta1)
-        y1 = radius2 * math.sin(theta1)
-
-        x2 = radius2 * math.cos(theta2)
-        y2 = radius2 * math.sin(theta2)
-
-        x3 = radius1 * math.cos(theta2)
-        y3 = radius1 * math.sin(theta2)
-
-        x4 = radius1 * math.cos(theta1)
-        y4 = radius1 * math.sin(theta1)
-
-        coordinates.append(((x1, y1), (x2, y2), (x3, y3), (x4, y4), (theta1 + theta2) / 2))  # Center of the circle
-    return coordinates
-
-
 def create_circle_coordinates2(radius1: float, radius2: float, num_triangles: int):
     coordinates = []
     faces = []
     freq = 16
-    amp0 = 0
-    amp1 = 0.02
+    amp_at0 = 0
+    amp_at1 = 0.02
     offset = 3
     r = radius1, radius2
-    pt0previ = None
-    pt1previ = None
-    pb0previ = None
-    pb1previ = None
+    prev_idx_top_p0 = None
+    prev_idx_top_p1 = None
+    prev_idx_bottom_p0 = None
+    prev_idx_bottom_p1 = None
     for i in range(num_triangles):
         theta = 2 * math.pi * i / num_triangles
 
-        num_points = 4
-        pt0 = r[0] * math.cos(theta), r[0] * math.sin(theta), math.sin(theta * freq) * r[0]*amp0 + offset
-        pt1 = r[1] * math.cos(theta), r[1] * math.sin(theta), math.sin(theta * freq) * r[1]*amp1 + offset
+        top_p0 = r[0] * math.cos(theta), r[0] * math.sin(theta), math.sin(theta * freq) * r[0] * amp_at0 + offset
+        top_p1 = r[1] * math.cos(theta), r[1] * math.sin(theta), math.sin(theta * freq) * r[1] * amp_at1 + offset
 
-        pt0i = len(coordinates) + 0
-        pt1i = len(coordinates) + 1
-        pb0i = len(coordinates) + 2
-        pb1i = len(coordinates) + 3
+        idx_top_p0 = len(coordinates) + 0
+        idx_top_p1 = len(coordinates) + 1
+        idx_bottom_p0 = len(coordinates) + 2
+        idx_bottom_p1 = len(coordinates) + 3
 
-        coordinates.extend((pt0, pt1, (*pt0[0:2], 0), (*pt1[0:2], 0)))
-        if pt0previ is not None and pt1previ is not None:
-            faces.append([pt0previ, pt1previ, pt1i,  pt0i])
-            faces.append([pb0previ, pb1previ, pb1i, pb0i])
-            faces.append([pt0previ, pt0i, pb0i, pb0previ])
-            faces.append([pt1previ, pt1i, pb1i, pb1previ])
+        coordinates.extend((top_p0, top_p1, (*top_p0[0:2], 0), (*top_p1[0:2], 0)))
+        if prev_idx_top_p0 is not None and prev_idx_top_p1 is not None:
+            faces.append([prev_idx_top_p0, prev_idx_top_p1, idx_top_p1, idx_top_p0])
+            faces.append([prev_idx_bottom_p0, prev_idx_bottom_p1, idx_bottom_p1, idx_bottom_p0])
+            faces.append([prev_idx_top_p0, idx_top_p0, idx_bottom_p0, prev_idx_bottom_p0])
+            faces.append([prev_idx_top_p1, idx_top_p1, idx_bottom_p1, prev_idx_bottom_p1])
 
-        pt0previ = pt0i
-        pt1previ = pt1i
-        pb0previ = pb0i
-        pb1previ = pb1i
+        prev_idx_top_p0 = idx_top_p0
+        prev_idx_top_p1 = idx_top_p1
+        prev_idx_bottom_p0 = idx_bottom_p0
+        prev_idx_bottom_p1 = idx_bottom_p1
 
-    faces.append([pt0previ, pt1previ, 1, 0])
-    faces.append([pb0previ, pb1previ, 3, 2])
-    faces.append([pt0previ, 0, 2, pb0previ])
-    faces.append([pt1previ, 1, 3, pb1previ])
+    # append the last to the first points
+    faces.append([prev_idx_top_p0, prev_idx_top_p1, 1, 0])
+    faces.append([prev_idx_bottom_p0, prev_idx_bottom_p1, 3, 2])
+    faces.append([prev_idx_top_p0, 0, 2, prev_idx_bottom_p0])
+    faces.append([prev_idx_top_p1, 1, 3, prev_idx_bottom_p1])
 
     return coordinates, faces
 
