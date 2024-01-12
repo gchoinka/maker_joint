@@ -10,7 +10,7 @@ from array import array
 from typing import Tuple, List, Optional
 
 from solid2 import cube, linear_extrude, polygon, cylinder, hull, scale, intersection, union, P3, scad_inline, surface, \
-    openscad_functions, polyhedron
+    openscad_functions, polyhedron, import_stl
 from solid2.core.object_base import OpenSCADObject
 from solid2_utils.utils import save_to_stl_scad, StlTask
 from solid2.extensions.bosl2.threading import buttress_threaded_rod
@@ -75,8 +75,8 @@ def create_circle_coordinates2(radius1: float, radius2: float, num_triangles: in
     coordinates = []
     faces = []
     freq = 16
-    amp_at0 = 0
-    amp_at1 = 0.02
+    amp_at0 = 0.03
+    amp_at1 = 0.03
     offset = 3
     r = radius1, radius2
     prev_idx_top_p0 = None
@@ -96,9 +96,9 @@ def create_circle_coordinates2(radius1: float, radius2: float, num_triangles: in
 
         coordinates.extend((top_p0, top_p1, (*top_p0[0:2], 0), (*top_p1[0:2], 0)))
         if prev_idx_top_p0 is not None and prev_idx_top_p1 is not None:
-            faces.append([prev_idx_top_p0, prev_idx_top_p1, idx_top_p1, idx_top_p0])
+            faces.append([idx_top_p1, prev_idx_top_p1, prev_idx_top_p0, idx_top_p0])
             faces.append([prev_idx_bottom_p0, prev_idx_bottom_p1, idx_bottom_p1, idx_bottom_p0])
-            faces.append([prev_idx_top_p0, idx_top_p0, idx_bottom_p0, prev_idx_bottom_p0])
+            faces.append([prev_idx_bottom_p0, idx_bottom_p0, idx_top_p0, prev_idx_top_p0])
             faces.append([prev_idx_top_p1, idx_top_p1, idx_bottom_p1, prev_idx_bottom_p1])
 
         prev_idx_top_p0 = idx_top_p0
@@ -106,11 +106,14 @@ def create_circle_coordinates2(radius1: float, radius2: float, num_triangles: in
         prev_idx_bottom_p0 = idx_bottom_p0
         prev_idx_bottom_p1 = idx_bottom_p1
 
-    # append the last to the first points
-    faces.append([prev_idx_top_p0, prev_idx_top_p1, 1, 0])
-    faces.append([prev_idx_bottom_p0, prev_idx_bottom_p1, 3, 2])
-    faces.append([prev_idx_top_p0, 0, 2, prev_idx_bottom_p0])
-    faces.append([prev_idx_top_p1, 1, 3, prev_idx_bottom_p1])
+    idx_top_p0 = 0
+    idx_top_p1 = 1
+    idx_bottom_p0 = 2
+    idx_bottom_p1 = 3
+    faces.append([idx_top_p1, prev_idx_top_p1, prev_idx_top_p0, idx_top_p0])
+    faces.append([prev_idx_bottom_p0, prev_idx_bottom_p1, idx_bottom_p1, idx_bottom_p0])
+    faces.append([prev_idx_bottom_p0, idx_bottom_p0, idx_top_p0, prev_idx_top_p0])
+    faces.append([prev_idx_top_p1, idx_top_p1, idx_bottom_p1, prev_idx_bottom_p1])
 
     return coordinates, faces
 
@@ -166,13 +169,10 @@ def make_joint_half() -> List[Tuple[Tuple[OpenSCADObject, P3], str]]:
     start_r = bold_d / 2
     stop_r = joint_r
 
-    rotation_stop_washer = polyhedron(*create_circle_coordinates2(start_r, stop_r, num_triangles))
-
-    joint_half = bottom_part + top_part + rotation_stop_washer.rotate([180, 0, 0])
-
+    rotation_stop_washer0 = polyhedron(*create_circle_coordinates2(start_r, stop_r, num_triangles)).down(3)
+    joint_half = bottom_part + top_part + rotation_stop_washer0.rotate([180, 0, 0])
     return [((joint_half, (-40, 80, 0)), "joint_half"),
-            ((rotation_stop_washer, (-40, -40, 0)), "rotation_stop_washer"),
-
+            ((rotation_stop_washer0, (-40, -40, 0)), "rotation_stop_washer")
             ]
 
 
@@ -191,7 +191,6 @@ def main(output_scad_basename, output_stl_basename, include_filter: Optional[str
     stl_tasks: List[StlTask] = [
         *middle_bolt(),
         *make_joint_half()
-        # (middle_end_nut(), "middle_end_nut")
     ]
     if include_filter is not None:
         stl_tasks = [t for t in stl_tasks if re.search(include_filter, t[1])]
