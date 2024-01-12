@@ -2,12 +2,15 @@ import argparse
 import itertools
 import math
 import os
+import re
 import shutil
 import sys
 from itertools import pairwise
+from array import array
 from typing import Tuple, List, Optional
 
-from solid2 import cube, linear_extrude, polygon, cylinder, hull, scale, intersection, union, P3, scad_inline
+from solid2 import cube, linear_extrude, polygon, cylinder, hull, scale, intersection, union, P3, scad_inline, surface, \
+    openscad_functions, polyhedron
 from solid2.core.object_base import OpenSCADObject
 from solid2_utils.utils import save_to_stl_scad, StlTask
 from solid2.extensions.bosl2.threading import buttress_threaded_rod
@@ -32,7 +35,7 @@ def middle_bolt() -> List[Tuple[Tuple[OpenSCADObject, P3], str]]:
     nut_l = 15
     bolt_l = nut_l * 2 + pipe_r * 4 + 3 * 3 + 4 * 2
     washer_h = 4
-    washer_r = bold_d / 2 * 1.8 #
+    washer_r = bold_d / 2 * 1.8  #
     bolt = buttress_threaded_rod(d=bold_d, l=bolt_l, pitch=2, _fa=1, _fs=0.5, internal=False).up(bolt_l / 2)
     # bolt -= cylinder(r=3.5 / 2, h=bolt_l + 2 * preview_fix, center=True, _fn=30).up(bolt_l / 2)
 
@@ -92,6 +95,50 @@ def create_circle_coordinates(radius1: float, radius2: float, num_triangles: int
     return coordinates
 
 
+def create_circle_coordinates2(radius1: float, radius2: float, num_triangles: int):
+    coordinates = []
+    faces = []
+    freq = 16
+    amp0 = 0
+    amp1 = 0.02
+    offset = 3
+    r = radius1, radius2
+    pt0previ = None
+    pt1previ = None
+    pb0previ = None
+    pb1previ = None
+    for i in range(num_triangles):
+        theta = 2 * math.pi * i / num_triangles
+
+        num_points = 4
+        pt0 = r[0] * math.cos(theta), r[0] * math.sin(theta), math.sin(theta * freq) * r[0]*amp0 + offset
+        pt1 = r[1] * math.cos(theta), r[1] * math.sin(theta), math.sin(theta * freq) * r[1]*amp1 + offset
+
+        pt0i = len(coordinates) + 0
+        pt1i = len(coordinates) + 1
+        pb0i = len(coordinates) + 2
+        pb1i = len(coordinates) + 3
+
+        coordinates.extend((pt0, pt1, (*pt0[0:2], 0), (*pt1[0:2], 0)))
+        if pt0previ is not None and pt1previ is not None:
+            faces.append([pt0previ, pt1previ, pt1i,  pt0i])
+            faces.append([pb0previ, pb1previ, pb1i, pb0i])
+            faces.append([pt0previ, pt0i, pb0i, pb0previ])
+            faces.append([pt1previ, pt1i, pb1i, pb1previ])
+
+        pt0previ = pt0i
+        pt1previ = pt1i
+        pb0previ = pb0i
+        pb1previ = pb1i
+
+    faces.append([pt0previ, pt1previ, 1, 0])
+    faces.append([pb0previ, pb1previ, 3, 2])
+    faces.append([pt0previ, 0, 2, pb0previ])
+    faces.append([pt1previ, 1, 3, pb1previ])
+
+    return coordinates, faces
+
+
 def seq(start, end, step):
     assert (step != 0)
     sample_count = int(abs(end - start) / step)
@@ -138,31 +185,18 @@ def make_joint_half() -> List[Tuple[Tuple[OpenSCADObject, P3], str]]:
     top_part = (top_washer + (
             pipe_1 + pipe_2) - compression_gap_washer - top_bottom_threshold - middle_hole) - dummy_rod - middle_hole_slopy
 
-    rotation_stop_washer = cube(1)  # cylinder(r=joint_r, h=rotate_part_h/1.66)
-    # num_triangles = 360  # You can adjust this value to change the number of triangles
-    #
-    # freq = 16
-    # start_amp = 0.05
-    # end_amp = 0.4
-    # offset = 2
-    # start_r = bold_d / 2
-    # stop_r = joint_r
-    # steps = 20
-    # step_r = (stop_r - start_r) / steps
-    # amp_step = (end_amp - start_amp) / steps
-    # r_pairs = list(pairwise(seq(start_r, joint_r + step_r, step_r)))
-    # for k in range(len(r_pairs)):
-    #     r1, r2 = r_pairs[k]
-    #     amp = start_amp + amp_step * k
-    #     circle_coordinates = create_circle_coordinates(r1, r2, num_triangles)
-    #     for i in range(len(circle_coordinates)):
-    #         segment = linear_extrude(math.sin(circle_coordinates[i][4] * freq) * amp + offset)(
-    #             polygon(circle_coordinates[i][0:4])).up(0)
-    #         rotation_stop_washer += segment
+    num_triangles = 360  # You can adjust this value to change the number of triangles
 
-    return [((bottom_part + top_part + rotation_stop_washer.rotate([180, 0, 0]), (-40, 80, 0)),
-             "joint_half"),
-            (((rotation_stop_washer) - middle_hole, (-40, -40, 0)), "rotation_stop_washer"),
+    start_r = bold_d / 2
+    stop_r = joint_r
+
+    rotation_stop_washer = polyhedron(*create_circle_coordinates2(start_r, stop_r, num_triangles))
+
+    joint_half = bottom_part + top_part + rotation_stop_washer.rotate([180, 0, 0])
+
+    return [((joint_half, (-40, 80, 0)), "joint_half"),
+            ((rotation_stop_washer, (-40, -40, 0)), "rotation_stop_washer"),
+
             ]
 
 
@@ -177,13 +211,15 @@ def parse_args():
     return parser.parse_args()
 
 
-def main(output_scad_basename, output_stl_basename, include_filter: Optional[str],  verbose:bool):
-    output: List[StlTask] = [
+def main(output_scad_basename, output_stl_basename, include_filter: Optional[str], verbose: bool):
+    stl_tasks: List[StlTask] = [
         *middle_bolt(),
         *make_joint_half()
         # (middle_end_nut(), "middle_end_nut")
     ]
-    save_to_stl_scad(output_scad_basename, output_stl_basename, output, verbose)
+    if include_filter is not None:
+        stl_tasks = [t for t in stl_tasks if re.search(include_filter, t[1])]
+    save_to_stl_scad(output_scad_basename, output_stl_basename, stl_tasks, verbose)
 
 
 if __name__ == "__main__":
@@ -197,4 +233,5 @@ if __name__ == "__main__":
     stl_output_path: str | None = output_path
     if shutil.which("openscad") is None or args.skip_stl:
         stl_output_path = None
-    main(output_scad_basename=output_path, output_stl_basename=stl_output_path, include_filter=args.include_filter, verbose=args.verbose)
+    main(output_scad_basename=output_path, output_stl_basename=stl_output_path, include_filter=args.include_filter,
+         verbose=args.verbose)
