@@ -23,7 +23,7 @@ jobs:
       shell: bash
       run: |
         source .pyenv/bin/activate
-        find "${{ github.workspace }}/src" -type f -name "*main.py" -exec python3.12 {} --verbose\;
+        find "${{ github.workspace }}/src" -type f -name "*main.py" -exec python3.12 {} --verbose \;
     - name: Archive production artifacts
       uses: actions/upload-artifact@v3
       with:
