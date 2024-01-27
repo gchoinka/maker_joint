@@ -43,7 +43,6 @@ jobs:
     - name: Release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/')
-      body_path:
       with:
         files: |
           build/*.tar.xz
