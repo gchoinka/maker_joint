@@ -3,32 +3,33 @@ from dataclasses import dataclass
 import math
 import operator
 import os
-import re
 import shutil
-from typing import Tuple, List, Optional, Iterable, Generator
+from pathlib import Path
+from typing import Tuple, List, Iterable, Generator
 
-from solid2 import cube, linear_extrude, polygon, cylinder, hull, scale, intersection, union, P3, scad_inline, surface, \
-    openscad_functions, polyhedron, import_stl
+from solid2 import cube, linear_extrude, cylinder, scale, intersection, P3, polyhedron
 from solid2.core.object_base import OpenSCADObject
-from solid2_utils.utils import save_to_file, RenderTask
+from solid2_utils.utils import save_to_file, RenderTask, modify_render_task
 from solid2.extensions.bosl2.threading import buttress_threaded_rod
 from solid2.extensions.bosl2.screw_drive import torx_mask2d
 
 unprintable_thickness = 0.01
 preview_fix = 0.05
 nut_slop = 0.4
+thread_pitch = 2
 
 
 def todo_remove_constant(v: any):
     return v
 
 
-def middle_bolt(scaffold_rod_r: float, middle_rod_r: float) -> List[Tuple[Tuple[OpenSCADObject, P3], str]]:
+def middle_bolt(scaffold_rod_r: float, middle_rod_r: float) -> List[RenderTask]:
     nut_l = 12
     bolt_l = nut_l * 2 + scaffold_rod_r * 2 * 4 + 3 * 3 + 4 * 2
     washer_h = 4
     washer_r = middle_rod_r * 1.8  #
-    bolt = buttress_threaded_rod(d=middle_rod_r * 2, l=bolt_l, pitch=2, _fa=1, _fs=0.5, internal=False).up(bolt_l / 2)
+    bolt = buttress_threaded_rod(d=middle_rod_r * 2, l=bolt_l, pitch=thread_pitch, _fa=1, _fs=0.5, internal=False).up(
+        bolt_l / 2)
 
     flat_face_box = cube([0.69 * middle_rod_r * 2, middle_rod_r * 2, bolt_l], center=True).up(bolt_l / 2)
     middle_rod = intersection()(bolt, flat_face_box)
@@ -39,7 +40,8 @@ def middle_bolt(scaffold_rod_r: float, middle_rod_r: float) -> List[Tuple[Tuple[
         scale(1.09)(flat_face_box))
     washer -= middle_rod_hole.down(preview_fix)
 
-    inside_thread = buttress_threaded_rod(d=middle_rod_r * 2, l=nut_l + preview_fix * 3, pitch=2, _fa=1, _fs=0.5,
+    inside_thread = buttress_threaded_rod(d=middle_rod_r * 2, l=nut_l + preview_fix * 3, pitch=thread_pitch, _fa=1,
+                                          _fs=0.5,
                                           internal=True,
                                           _slop=nut_slop).rotate([180, 0, 0]).up(nut_l / 2 - preview_fix)
     top_chamfer_h = 3
@@ -54,9 +56,9 @@ def middle_bolt(scaffold_rod_r: float, middle_rod_r: float) -> List[Tuple[Tuple[
 
     nut = torx_nut - inside_thread
 
-    return [((middle_rod, (0, 0, 0)), "middle_rod"),
-            ((nut, (20, 20, 0)), "nut"),
-            ((washer, (40, -40, 0)), "washer"),
+    return [RenderTask(middle_rod, (0, 0, 0), Path("middle_rod")),
+            RenderTask(nut, (20, 20, 0), Path("nut")),
+            RenderTask(washer, (40, -40, 0), Path("washer")),
             ]
 
 
@@ -107,7 +109,7 @@ def create_rotation_stop_washer(r1_hole: float, r2_outside: float, h: float = 3,
     return coordinates, faces
 
 
-def make_joint_half(scaffold_rod_r: float, middle_rod_r: float) -> List[Tuple[Tuple[OpenSCADObject, P3], str]]:
+def make_joint_half(scaffold_rod_r: float, middle_rod_r: float) -> List[RenderTask]:
     rotate_part_h = 1.5
     compression_gap_h = scaffold_rod_r / 2
     top_washer_h = scaffold_rod_r + rotate_part_h - compression_gap_h / 2
@@ -156,7 +158,7 @@ def make_joint_half(scaffold_rod_r: float, middle_rod_r: float) -> List[Tuple[Tu
     joint_half = bottom_part + rotation_stop_washer.rotate([180, 0, 0]) - middle_hole
 
     inside_thread_h = body_h + rotation_stop_washer_h
-    inside_thread = buttress_threaded_rod(d=middle_rod_r * 2, l=inside_thread_h, pitch=2, _fa=1, _fs=0.5,
+    inside_thread = buttress_threaded_rod(d=middle_rod_r * 2, l=inside_thread_h, pitch=thread_pitch, _fa=1, _fs=0.5,
                                           internal=True,
                                           _slop=nut_slop - 0.2).rotate([180, 0, 0]).up(
         inside_thread_h / 2. - rotation_stop_washer_h)
@@ -173,19 +175,9 @@ def make_joint_half(scaffold_rod_r: float, middle_rod_r: float) -> List[Tuple[Tu
         center=True))
     joint_half_end = bottom_part + rotation_stop_washer.rotate(
         [180, 0, 0]) - inside_thread - middle_hole.rotate([180, 0, 0])
-    return [((joint_half, (-40, 80, 0)), "joint_half"),
-            ((joint_half_end, (-80, 80, 0)), "joint_half_end"),
+    return [RenderTask(joint_half, (-40, 80, 0), Path("joint_half")),
+            RenderTask(joint_half_end, (-80, 80, 0), Path("joint_half_end")),
             ]
-
-
-def modify_render_task(tasks: Iterable[RenderTask], offset: P3 = (0.0, 0.0, 0.0), name_suffix: str = "") -> Generator[
-    RenderTask, None, None]:
-    for task in tasks:
-        obj = task[0][0]
-        pos = task[0][1]
-        new_pos = (pos[0] + offset[0], pos[1] + offset[1], pos[2] + offset[2])
-        new_name = f"{task[1]}{name_suffix}"
-        yield (obj, new_pos), new_name
 
 
 @dataclass
@@ -194,11 +186,10 @@ class MakerJointSet:
     middle_rod_r: float
 
 
-def render_to_files(output_basename: str, include_filter: str | None, openscad_bin: str | None = None,
-                    verbose: bool = False) -> None:
-    render_task = list()
+def maker_joint_sets() -> List[RenderTask]:
+    render_task: List[RenderTask] = list()
     sets: List[MakerJointSet] = [MakerJointSet(sr, mr) for sr, mr in (
-    (3 / 2, 6 / 2), (6 / 2, 10 / 2), (8 / 2, 10 / 2), (8 / 2, 10 / 2), (8 / 2, 10 / 2), (8 / 2, 10 / 2))]
+        (3 / 2, 6 / 2), (6 / 2, 10 / 2), (8 / 2, 10 / 2), (8 / 2, 10 / 2), (8 / 2, 10 / 2), (8 / 2, 10 / 2))]
     offset_pos = (0., 0., 0.)
     offset_diff = (100., 100., 100.)
     for s in sets:
@@ -206,19 +197,10 @@ def render_to_files(output_basename: str, include_filter: str | None, openscad_b
             *middle_bolt(s.scaffold_rod_r, s.middle_rod_r),
             *make_joint_half(s.scaffold_rod_r, s.middle_rod_r)
         ]
-        render_task += list(modify_render_task(sub_render_task, offset_pos, name_suffix=f"_{s.scaffold_rod_r*2:.0f}mm"))
+        render_task += list(
+            modify_render_task(sub_render_task, offset_pos, name_suffix=f"_{s.scaffold_rod_r * 2:.0f}mm"))
         offset_pos = tuple(map(operator.add, offset_pos, offset_diff))
-
-    if include_filter is not None:
-        render_task = [t for t in render_task if re.search(include_filter, t[1])]
-
-    if verbose:
-        print(f"Will generate ", end="")
-        for task in render_task:
-            print(f"{task[1]} ", end="")
-        print()
-
-    save_to_file(output_basename, openscad_bin, render_task, "all", verbose=verbose)
+    return render_task
 
 
 def parse_args():
@@ -228,7 +210,7 @@ def parse_args():
     parser.add_argument('--skip_rendering', action='store_true')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--openscad_bin')
-    parser.add_argument('--include_filter')
+    parser.add_argument('--include_filter_regex')
     return parser.parse_args()
 
 
@@ -240,15 +222,17 @@ def main():
     if not os.path.exists(output_path):
         os.makedirs(output_path)
 
-    openscad_bin = args.openscad_bin if args.openscad_bin is not None else shutil.which("openscad")
+    openscad_bin: Path | None = Path(args.openscad_bin) if args.openscad_bin is not None else shutil.which("openscad")
     if openscad_bin is None:
         print("Didn't found openscad in PATH environment variable, skipping rendering 3mf/stl/png!")
 
     if args.skip_rendering:
         openscad_bin = None
 
-    render_to_files(output_basename=output_path, include_filter=args.include_filter, openscad_bin=openscad_bin,
-                    verbose=args.verbose)
+    render_tasks = maker_joint_sets()
+    save_to_file(Path(output_path), openscad_bin, render_tasks, Path("all"),
+                 include_filter_regex=args.include_filter_regex,
+                 verbose=args.verbose)
 
 
 if __name__ == "__main__":
